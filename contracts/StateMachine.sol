@@ -3,27 +3,31 @@ pragma solidity 0.4.19;
 
 contract StateMachine {
 
-    // mapping transitionId to functions that must be performed when transitioning into the new state
-    mapping(bytes32 => function() internal[]) transitionEffects;
+    //Struct to hold elements of transition
+    struct Transitions {
+        function() internal[] transitionEffects; 
+        function(bytes32) internal returns(bool)[] startConditions; 
+        bool transitionExists; //Probably not needed...
+    }
 
-    // mapping transitionId to start condition which must be true to perform a transition
-    mapping(bytes32 => function(bytes32) internal returns(bool)[]) startConditions;
+    //Mapping of each transition id to info. 
+    mapping(bytes32 => Transitions) transitions;
 
-    // mapping transition id to bool
-    mapping(bytes32 => bool) transitionExists;
+    //Struct to hold elements of each state
+    struct States {
+        bytes32[] nextStates;
+        mapping(bytes4=>bool) allowedFunctions; 
+    }
+
+    //Mapping of each state id to info. 
+    mapping(bytes32 => States) states; 
 
     // The current state id
     bytes32 public currentStateId;
 
-    // Maps state ids to all states reachable by 1 transition
-    mapping(bytes32 => bytes32[]) internal nextStates;
-
     // after the first transition in the state machine has occurred, it is immutable
     // therefore set up must be complete by this time
     bool machineImmutable;
-
-    // stores true/false for allowed functions in each state
-    mapping(bytes32 => mapping(bytes4 => bool)) public allowedFunctions;
 
     event LogTransition(bytes32 stateId, uint256 blockNumber);
 
@@ -32,7 +36,7 @@ contract StateMachine {
      */
     modifier checkAllowed {
         conditionalTransitions();
-        require(allowedFunctions[currentStateId][msg.sig]);
+        require(states[currentStateId].allowedFunctions[msg.sig]);
         _;
     }
 
@@ -62,8 +66,8 @@ contract StateMachine {
     /// @param _toStateId The id of the end state of the transition.
     function createTransition(bytes32 _fromStateId, bytes32 _toStateId) internal stillSettingUp {
         bytes32 transitionId = getTransitionId(_fromStateId, _toStateId);
-        nextStates[_fromStateId].push(_toStateId);
-        transitionExists[transitionId] = true;
+        states[_fromStateId].nextStates.push(_toStateId);
+        transitions[transitionId].transitionExists = true; 
     }
 
     /// @dev adds a condition that must be true for a transition to occur.
@@ -72,8 +76,8 @@ contract StateMachine {
     /// @param _startCondition The condition itself.
     function addStartCondition(bytes32 _fromStateId, bytes32 _toStateId, function(bytes32) internal returns(bool) _startCondition) internal stillSettingUp {
         bytes32 transitionId = getTransitionId(_fromStateId, _toStateId);
-        require(transitionExists[transitionId]);
-        startConditions[transitionId].push(_startCondition);
+        require(transitions[transitionId].transitionExists);
+        transitions[transitionId].startConditions.push(_startCondition);
     }
 
     /// @dev adds an effect that is performed when a transition occurs
@@ -82,24 +86,25 @@ contract StateMachine {
     /// @param _transitionEffect The effect itself.
     function addTransitionEffect(bytes32 _fromStateId, bytes32 _toStateId, function() internal _transitionEffect) internal stillSettingUp {
         bytes32 transitionId = getTransitionId(_fromStateId, _toStateId);
-        require(transitionExists[transitionId]);
-        transitionEffects[transitionId].push(_transitionEffect);
+        require(transitions[transitionId].transitionExists);
+        transitions[transitionId].transitionEffects.push(_transitionEffect);
     }
 
     /// @dev Allow a function in the given state.
     /// @param _stateId The id of the state
     /// @param _functionSelector A function selector (bytes4[keccak256(functionSignature)])
     function allowFunction(bytes32 _stateId, bytes4 _functionSelector) internal stillSettingUp {
-        allowedFunctions[_stateId][_functionSelector] = true;
+        states[_stateId].allowedFunctions[_functionSelector] = true;
     }
 
     /// @dev Goes to the next state if possible (if the next state is valid and reachable by a transition from the current state)
     /// @param _nextStateId stateId of the state to transition to
     function goToNextState(bytes32 _nextStateId) internal {
         bytes32 transitionId = getTransitionId(currentStateId, _nextStateId);
-        require(transitionExists[transitionId]);
-        for (uint256 i = 0; i < transitionEffects[transitionId].length; i++) {
-            transitionEffects[transitionId][i]();
+        require(transitions[transitionId].transitionExists);
+        function() internal[] theEffects = transitions[transitionId].transitionEffects;
+        for (uint256 i = 0; i < theEffects.length; i++) {
+            theEffects[i]();
         }
         currentStateId = _nextStateId;
         if (!machineImmutable) {
@@ -113,7 +118,7 @@ contract StateMachine {
     ///@dev by taking into account the current conditions and how many further transitions can occur 
     function conditionalTransitions() internal {
 
-        bytes32[] storage outgoing = nextStates[currentStateId];
+        bytes32[] storage outgoing = states[currentStateId].nextStates;
 
         while (outgoing.length > 0) {
             bool stateChanged = false;
@@ -123,11 +128,12 @@ contract StateMachine {
                 bytes32 nextState = outgoing[j];
                 bytes32 transitionId = getTransitionId(currentStateId, nextState);
                 // If this state's start condition is met, go to this state and continue
-                for (uint256 i = 0; i < startConditions[transitionId].length; i++) {
-                    if (startConditions[transitionId][i](nextState)) {
+                function(bytes32) internal returns(bool)[] startConds = transitions[transitionId].startConditions;
+                for (uint256 i = 0; i < startConds.length; i++) {
+                    if (startConds[i](nextState)) {
                         goToNextState(nextState);
                         stateChanged = true;
-                        outgoing = nextStates[currentStateId];
+                        outgoing = states[currentStateId].nextStates;
                         break;
                     }
                 }

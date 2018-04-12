@@ -27,7 +27,7 @@ contract TimedStateMachine is StateMachine {
 
         bytes32 transitionId = getTransitionId(_fromStateId, _toStateId);           
         if (transitionStartTime[transitionId] == 0) {
-            if (!transitionExists[transitionId]) {
+            if (!transitions[transitionId].transitionExists) {
                 createTransition(_fromStateId, _toStateId);
             }
             addStartCondition(_fromStateId, _toStateId, hasStartTimePassed);
